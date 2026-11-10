@@ -147,8 +147,8 @@ class PlayerService : Service() {
         cues = try {
             val bytes = contentResolver.openInputStream(u)!!.use { s -> s.readBytes() }
             Sub.parse(Sub.decode(bytes), name)
-        } catch (e: Exception) {
-            fail("Gagal baca subtitle: ${e.message}")
+        } catch (e: Throwable) {
+            fail("Gagal baca subtitle: ${e.javaClass.simpleName}: ${e.message}")
             emptyList()
         }
         State.sub = if (cues.isEmpty()) "gak ada baris subtitle yang terbaca" else
