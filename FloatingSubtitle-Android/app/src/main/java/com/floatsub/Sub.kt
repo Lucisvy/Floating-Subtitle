@@ -4,8 +4,8 @@ data class Cue(val s: Long, val e: Long, val t: String)
 
 object Sub {
     private val CUE = Regex("""(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})\s*-->\s*(?:(\d+):)?(\d{1,2}):(\d{2})[.,](\d{1,3})""")
-    private val LRC = Regex("""\[(\d+):(\d+(?:\.\d+)?)]""")
-    private val TAGS = Regex("""<[^>]+>|\{[^}]*}""")
+    private val LRC = Regex("""\[(\d+):(\d+(?:\.\d+)?)\]""")
+    private val TAGS = Regex("""<[^>]+>|\{[^}]*\}""")
 
     private fun clean(s: String) = TAGS.replace(s, "").trim()
 
