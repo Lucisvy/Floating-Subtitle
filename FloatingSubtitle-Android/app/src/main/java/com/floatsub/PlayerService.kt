@@ -121,6 +121,11 @@ class PlayerService : Service() {
         super.onDestroy()
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        shutdown()                      // aplikasi dibuang dari daftar aplikasi terbuka -> semuanya berhenti
+        super.onTaskRemoved(rootIntent)
+    }
+
     // ---------- muat file
     private fun load(i: Intent) {
         val uris = i.getStringArrayListExtra("uris") ?: return
@@ -276,7 +281,10 @@ class PlayerService : Service() {
         bg.cornerRadius = 14 * d
         bg.setColor(Color.argb(prefs.getInt("alpha", 55) * 255 / 100, 0, 0, 0))
         v.background = bg
-        lp.flags = FLAGS or (if (prefs.getBoolean("lock", false)) WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE else 0)
+        val locked = prefs.getBoolean("lock", false)
+        lp.flags = FLAGS or (if (locked) WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE else 0)
+        // Android 12+: sentuhan baru tembus ke aplikasi lain kalo alpha jendela overlay <= 0.8
+        lp.alpha = if (locked) 0.79f else 1f
         wm?.updateViewLayout(v, lp)
     }
 

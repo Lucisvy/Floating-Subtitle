@@ -20,6 +20,11 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
+import android.widget.Toast
+import android.os.Environment
+import android.provider.DocumentsContract
+import android.provider.MediaStore
+import java.io.File
 
 class MainActivity : Activity() {
 
@@ -28,6 +33,7 @@ class MainActivity : Activity() {
     private lateinit var tvStatus: TextView
     private lateinit var tvTime: TextView
     private lateinit var tvPerm: TextView
+    private lateinit var tvFiles: TextView
     private lateinit var btnPlay: Button
     private lateinit var sbPos: SeekBar
     private lateinit var spTracks: Spinner
@@ -129,9 +135,9 @@ class MainActivity : Activity() {
             row.addView(x, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             return x
         }
-        rowButton("⏪ 5s") { send(PlayerService.SEEK_BY) { putExtra("ms", -5000) } }
+        rowButton("⏪ 10s") { send(PlayerService.SEEK_BY) { putExtra("ms", -10000) } }
         btnPlay = rowButton("▶ Putar") { send(PlayerService.TOGGLE) }
-        rowButton("5s ⏩") { send(PlayerService.SEEK_BY) { putExtra("ms", 5000) } }
+        rowButton("10s ⏩") { send(PlayerService.SEEK_BY) { putExtra("ms", 10000) } }
 
         label("Tampilan overlay", 16f)
         label("Ukuran teks", 12f)
@@ -152,6 +158,8 @@ class MainActivity : Activity() {
         button("🔓 Izinkan tampil di atas aplikasi lain") {
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
         }
+        tvFiles = label("", 12f)
+        button("📁 Izinkan akses semua file (biar subtitle dicari otomatis)") { openAllFiles() }
         button("⏹ Tutup semua") { if (State.running) send(PlayerService.STOP) }
 
         if (Build.VERSION.SDK_INT >= 33) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2)
@@ -170,6 +178,67 @@ class MainActivity : Activity() {
         i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, !onlySub)
         i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
         startActivityForResult(i, 1)
+    }
+
+    // ---------- cari subtitle bernama sama di folder yang sama dengan audio
+    private fun canReadAll(): Boolean = Build.VERSION.SDK_INT < 30 || Environment.isExternalStorageManager()
+
+    private fun openAllFiles() {
+        if (Build.VERSION.SDK_INT < 30) return
+        try {
+            startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")))
+        } catch (e: Exception) {
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            } catch (e2: Exception) {
+                Toast.makeText(this, "Buka Pengaturan > Aplikasi > Akses khusus > Akses semua file, lalu aktifkan untuk Floating Subtitle.", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun mediaPath(u: Uri): String? {
+        contentResolver.query(u, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)?.use { c ->
+            if (c.moveToFirst()) return c.getString(0)
+        }
+        return null
+    }
+
+    /** Ubah alamat content:// dari pemilih file jadi lokasi file asli (kalo bisa). */
+    private fun realPath(u: Uri): String? {
+        try {
+            if (u.scheme == "file") return u.path
+            if (!DocumentsContract.isDocumentUri(this, u)) return null
+            val id = DocumentsContract.getDocumentId(u)
+            when (u.authority) {
+                "com.android.externalstorage.documents" -> {
+                    val k = id.indexOf(':')
+                    if (k < 0) return null
+                    val vol = id.substring(0, k)
+                    val root = if (vol.equals("primary", ignoreCase = true)) Environment.getExternalStorageDirectory().path else "/storage/$vol"
+                    return root + "/" + id.substring(k + 1)
+                }
+                "com.android.providers.downloads.documents" -> {
+                    if (id.startsWith("raw:")) return id.removePrefix("raw:")
+                    return mediaPath(MediaStore.Files.getContentUri("external", id.substringAfter(':').toLong()))
+                }
+                "com.android.providers.media.documents" ->
+                    return mediaPath(MediaStore.Files.getContentUri("external", id.substringAfter(':').toLong()))
+            }
+        } catch (e: Exception) {
+        }
+        return null
+    }
+
+    private fun findSub(audio: Uri): Pair<Uri, String>? {
+        val path = realPath(audio) ?: return null
+        val f = File(path)
+        val base = f.nameWithoutExtension
+        val files = f.parentFile?.listFiles() ?: return null
+        val hit = files.firstOrNull { x ->
+            x.isFile && x.nameWithoutExtension.equals(base, ignoreCase = true) &&
+                x.extension.lowercase() in listOf("srt", "lrc", "vtt")
+        } ?: return null
+        return Pair(Uri.fromFile(hit), hit.name)
     }
 
     private fun nameOf(u: Uri): String {
@@ -202,6 +271,22 @@ class MainActivity : Activity() {
         }
         val names = ArrayList(uris.map { u -> nameOf(u) })
         val strs = ArrayList(uris.map { u -> u.toString() })
+        val isSub = Regex("""\.(srt|lrc|vtt|txt)$""", RegexOption.IGNORE_CASE)
+        val have = names.filter { n -> isSub.containsMatchIn(n) }.map { n -> n.substringBeforeLast('.').lowercase() }.toSet()
+        var missing = 0
+        for (k in uris.indices) {
+            if (isSub.containsMatchIn(names[k]) || names[k].substringBeforeLast('.').lowercase() in have) continue
+            val found = findSub(uris[k])
+            if (found == null) {
+                missing++
+            } else {
+                strs.add(found.first.toString())
+                names.add(found.second)
+            }
+        }
+        if (missing > 0 && !canReadAll()) {
+            Toast.makeText(this, "Subtitle gak ketemu otomatis. Aktifkan akses semua file di layar utama, atau pilih subtitle manual.", Toast.LENGTH_LONG).show()
+        }
         send(PlayerService.LOAD) {
             putStringArrayListExtra("uris", strs)
             putStringArrayListExtra("names", names)
@@ -223,6 +308,8 @@ class MainActivity : Activity() {
             tvTime.text = fmt(State.pos) + " / " + fmt(State.dur)
             tvPerm.text = if (Settings.canDrawOverlays(this@MainActivity)) "✅ Izin tampil di atas aplikasi lain aktif"
             else "⚠ Izin tampil di atas aplikasi lain belum aktif: tekan tombol di bawah ini"
+            tvFiles.text = if (canReadAll()) "✅ Akses semua file aktif: subtitle dicari otomatis"
+            else "⚠ Akses semua file belum aktif: subtitle harus dipilih manual"
             if (State.names != lastNames) {
                 lastNames = State.names
                 spTracks.adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, State.names)
